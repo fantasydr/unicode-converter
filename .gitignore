@@ -1,0 +1,6 @@
+*.suo
+*.idc
+bin/*
+obj/*
+*.user
+[Ss]amples/
