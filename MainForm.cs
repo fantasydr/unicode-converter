@@ -6,16 +6,19 @@ using System.Drawing;
 using System.IO;
 using System.Linq;
 using System.Text;
+using System.Threading;
 using System.Windows.Forms;
 
 namespace UniFileChecker
 {
     public partial class MainForm : Form
     {
+        string defaultTitle;
         public MainForm()
         {
             InitializeComponent();
 
+            defaultTitle = this.Text;
             txtExt.Text = "*.ks;*.tjs;*.txt";
             txtPath.Text = Directory.GetCurrentDirectory();
         }
@@ -67,10 +70,28 @@ namespace UniFileChecker
             int count = 0;
             foreach (string extEntry in exts)
             {
-                string[] files = Directory.GetFiles(path, extEntry, op);
-                count += files.Length;
+                string[] files;
+                try
+                {
+                    files = Directory.GetFiles(path, extEntry, op);
+                }
+                catch (System.Exception ex)
+                {
+                    MessageBox.Show("无法获取文件列表:\n" + ex.Message, defaultTitle, MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    break;
+                }
+                
                 foreach(string file in files)
                 {
+                    count++;
+                    if (count % 100 == 0)
+                    {
+                        this.BeginInvoke(new ThreadStart(delegate()
+                        {
+                            this.Text = defaultTitle + " - " + file;
+                        }));
+                    }
+
                     try
                     {
                         if (!CheckUnicode(file))
@@ -86,6 +107,28 @@ namespace UniFileChecker
             }
 
             return count;
+        }
+
+        private void ConvertFiles(bool backup)
+        {
+            bad.Clear();
+
+            foreach (string file in ascii)
+            {
+                try
+                {
+                    this.BeginInvoke(new ThreadStart(delegate()
+                    {
+                        this.Text = defaultTitle + " - " + file;
+                    }));
+
+                    ConvertToUnicode(file, backup);
+                }
+                catch (Exception exp)
+                {
+                    bad.Add(exp.Message + ":" + file);
+                }
+            }
         }
 
         List<string> ascii = new List<string>();
@@ -111,14 +154,30 @@ namespace UniFileChecker
 
             ascii.Clear();
             bad.Clear();
+            btnScan.Enabled = false;
+            btnConvert.Enabled = false;
 
-            int count = ScanFiles(path, exts);
+            // 开始扫描文件
+            int count = 0;
+            Thread t = new Thread(new ThreadStart (delegate(){
+                count = ScanFiles(path, exts);
+            }));
+            t.Start();
+            while (!t.Join(100))
+            {
+                Application.DoEvents();
+            }
+
+            btnScan.Enabled = true;
+            this.Invoke(new ThreadStart(delegate()
+            {
+                this.Text = defaultTitle;
+            }));
             btnConvert.Enabled = ascii.Count > 0;
-
 
             // 生成报告
             StringBuilder sb = new StringBuilder();
-            sb.AppendFormat("已扫描{0}个文件, {1}个非Unicode-LE文件, {2}个错误文件。", count, ascii.Count, bad.Count);
+            sb.AppendFormat("已扫描 {0} 个文件, {1} 个非Unicode-LE文件, {2} 个错误文件。", count, ascii.Count, bad.Count);
             sb.AppendLine("");
             sb.AppendLine("");
             sb.AppendLine("点击“转Unicode”按钮可将扫描结果批量转为Unicode-LE。");
@@ -158,23 +217,25 @@ namespace UniFileChecker
             bool backup = (ret == DialogResult.Yes);
 
             btnConvert.Enabled = false;
-            bad.Clear();
 
-            foreach (string file in ascii)
+            // 开始转换文件
+            Thread t = new Thread(new ThreadStart(delegate()
             {
-                try
-                {
-                    ConvertToUnicode(file, backup);
-                }
-                catch (Exception exp)
-                {
-                    bad.Add(exp.Message + ":" + file);
-                }
+                ConvertFiles(backup);
+            }));
+            t.Start();
+            while (!t.Join(100))
+            {
+                Application.DoEvents();
             }
+            this.Invoke(new ThreadStart(delegate()
+            {
+                this.Text = defaultTitle;
+            }));
 
             StringBuilder sb = new StringBuilder();
             sb.AppendLine("");
-            sb.AppendFormat("尝试转换{0}个文件，成功{1}个，失败{2}个。", ascii.Count, ascii.Count - bad.Count, bad.Count);
+            sb.AppendFormat("尝试转换 {0} 个文件，成功 {1} 个，失败 {2} 个。", ascii.Count, ascii.Count - bad.Count, bad.Count);
             sb.AppendLine("");
             if (bad.Count > 0)
             {
